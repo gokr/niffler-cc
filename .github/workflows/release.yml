@@ -83,7 +83,7 @@ jobs:
           fi
           cat > /tmp/ciinstall.nim <<'EOF'
           import std/[json, os]
-          import natswrapper
+          import natsnim
           import niffler/sdk
           var nc = connect(getEnv("NIF_NATS_URL"))
           proc call(compName, tool: string, args: JsonNode,
@@ -92,7 +92,7 @@ jobs:
             var msg: ptr natsMsg
             let st = natsConnection_Request(addr msg, nc.conn,
               ("svc." & compName & ".call").cstring, data.cstring,
-              data.len.cint, timeoutMs.int64 * 1_000_000)
+              data.len.cint, timeoutMs.int64)
             if st == NATS_TIMEOUT: return %*{"error": "timeout"}
             if not checkStatus(st): return %*{"error": "nats " & $st}
             let r = decode($natsMsg_GetData(msg))
