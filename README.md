@@ -21,6 +21,12 @@ service.ts: 47 functions, worst 6
 
 ## Install
 
+Requires a Niffler harness whose `builder` resolves a TypeScript component's
+dependencies from its imports and whose `plugins` manifest accepts
+`"lang": "ts"` (both landed together; see the harness CHANGELOG entry *"TS
+components resolve their own dependencies from their own imports"*). On an older
+harness `plugin_install` answers `niffler.json: unsupported lang 'ts' for cc`.
+
 ```bash
 plugin_install {"repo": "gokr/niffler-cc"}
 ```
