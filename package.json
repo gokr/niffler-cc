@@ -1,0 +1,17 @@
+{
+  "name": "niffler-cc",
+  "private": true,
+  "version": "0.1.0",
+  "//": "Development project for editors and the TypeScript language server. The builder compiles the component from cc/main.ts in its own generated project (var/build/cc of the harness that builds it) and resolves the imports below itself, so this file is never part of a build — it exists so `npm install` + `tsc --noEmit` (or any LSP) see the same module graph the builder will.",
+  "dependencies": {
+    "niffler-sdk": "file:../sdk/ts",
+    "ts-morph": "^28.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

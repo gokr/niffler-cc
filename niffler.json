@@ -1,0 +1,13 @@
+{
+  "name": "niffler-cc",
+  "version": "0.1.0",
+  "description": "Cyclomatic complexity per function for TypeScript/JavaScript files, from the TypeScript AST (ts-morph)",
+  "license": "MIT",
+  "components": [
+    {
+      "name": "cc",
+      "lang": "ts",
+      "main": "cc/main.ts"
+    }
+  ]
+}

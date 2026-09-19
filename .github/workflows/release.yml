@@ -1,0 +1,129 @@
+name: verify
+
+# Verifies this package the way a real Niffler install does — by running the
+# harness itself (core + builder + plugins) and driving plugin_install over the
+# bus, which compiles cc/main.ts from source through the builder component and
+# spawns it. No binaries are published: installs always build from source with
+# the user's own toolchain.
+#
+# On every PR: typecheck cc/main.ts against the real SDK (the builder's import
+# scan is what installs ts-morph, so the PR job mirrors that by hand).
+# On tag pushes: the full install through the harness, since plugin_install
+# pins the tagged ref.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cc
+      - uses: actions/checkout@v4
+        with:
+          repository: gokr/niffler
+          path: niffler
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the SDK this component compiles against
+        working-directory: niffler/sdk/ts
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: Typecheck the component (every PR and tag)
+        working-directory: cc
+        run: |
+          # The dev project links the SDK from a sibling checkout; CI cloned the
+          # harness as `niffler`, so drop that dep and install the built SDK by
+          # path instead (last, since `npm install` would prune it).
+          npm pkg delete dependencies.niffler-sdk
+          npm install --no-audit --no-fund
+          npm install --no-audit --no-fund --no-save "$GITHUB_WORKSPACE/niffler/sdk/ts"
+          npx tsc --noEmit
+
+      - uses: jiro4989/setup-nim-action@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          nim-version: stable
+      - name: System deps (what a real Niffler install needs)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          sudo apt-get update && sudo apt-get install -y libclang-dev
+          git clone --depth 1 https://github.com/nats-io/nats.c /tmp/nats.c
+          cmake -S /tmp/nats.c -B /tmp/nats.c/build \
+            -DNATS_BUILD_WITH_TLS=OFF -DNATS_BUILD_STREAMING=OFF \
+            -DNATS_BUILD_EXAMPLES=OFF -DNATS_BUILD_LIB_ONLY=ON
+          cmake --build /tmp/nats.c/build -j2
+          sudo cmake --install /tmp/nats.c/build
+          echo /usr/local/lib | sudo tee /etc/ld.so.conf.d/libnats.conf >/dev/null
+          sudo ldconfig
+          cd niffler && nimble install -y -d
+
+      - name: Build the harness
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: niffler
+        run: make build
+
+      - name: Install the package through the harness itself
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: niffler
+        env:
+          NIF_CC_REF: ${{ github.ref_name }}
+        run: |
+          NIF_AUTO_APPROVE=1 ./var/bin/niffler </dev/null >core.log 2>&1 &
+          CORE_PID=$!
+          for i in $(seq 1 60); do [ -f var/nats-url ] && break; sleep 1; done
+          if [ ! -f var/nats-url ]; then
+            echo "harness failed to start:"; tail -20 core.log; exit 1
+          fi
+          cat > /tmp/ciinstall.nim <<'EOF'
+          import std/[json, os]
+          import natswrapper
+          import niffler/sdk
+          var nc = connect(getEnv("NIF_NATS_URL"))
+          proc call(compName, tool: string, args: JsonNode,
+                    timeoutMs: int): JsonNode =
+            let data = callEnvelope(tool, args).encode()
+            var msg: ptr natsMsg
+            let st = natsConnection_Request(addr msg, nc.conn,
+              ("svc." & compName & ".call").cstring, data.cstring,
+              data.len.cint, timeoutMs.int64 * 1_000_000)
+            if st == NATS_TIMEOUT: return %*{"error": "timeout"}
+            if not checkStatus(st): return %*{"error": "nats " & $st}
+            let r = decode($natsMsg_GetData(msg))
+            natsMsg_Destroy(msg)
+            if r.kind == ekError: return %*{"error": r.error{"message"}}
+            return r.args
+          # wait for the plugins component to register
+          for i in 0 ..< 60:
+            let p = call("plugins", "plugin_installed", %*{}, 5_000)
+            if p{"error"} == nil: break
+            sleep(1000)
+          let inst = call("plugins", "plugin_install",
+            %*{"repo": "gokr/niffler-cc",
+               "version": getEnv("NIF_CC_REF")}, 600_000)
+          echo "install: ", $inst
+          if not inst{"ok"}.getBool(false): quit(1)
+          # analyze a TypeScript file that ships with the harness itself
+          var r = %*{}
+          for i in 0 ..< 15:
+            r = call("cc", "cc_analyze",
+                     %*{"path": "sdk/ts/src/envelope.ts"}, 60_000)
+            if r{"error"} == nil: break
+            sleep(1000)
+          echo "cc_analyze: ", $r
+          if r{"error"} != nil: quit(1)
+          if r{"summary", "methods"}.getInt(0) <= 0: quit(1)
+          echo "CI INSTALL OK"
+          EOF
+          export NIF_NATS_URL=$(cat var/nats-url)
+          nim c --hints:off --path:sdk -o:/tmp/ci-install /tmp/ciinstall.nim
+          /tmp/ci-install
+          RC=$?
+          kill $CORE_PID 2>/dev/null; wait $CORE_PID 2>/dev/null
+          exit $RC

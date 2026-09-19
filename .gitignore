@@ -1,0 +1,7 @@
+# dev project for editors / LSP — the builder generates its own
+node_modules/
+dist/
+
+# harness runtime state, if this package is developed inside a checkout
+var/
+package-lock.json
